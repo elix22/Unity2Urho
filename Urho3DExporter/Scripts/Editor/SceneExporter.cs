@@ -1,5 +1,4 @@
 ﻿using System.Collections.Generic;
-using System.Xml;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -15,8 +14,15 @@ namespace Urho3DExporter
         public void ExportAsset(AssetContext asset, Scene scene)
         {
             var exlusion = new HashSet<Renderer>();
-            using (XmlTextWriter writer = CreateXmlFile(asset))
+            var sceneAssetName = asset.UrhoAssetName;
             {
+                //Fix scene path
+                sceneAssetName = "Scenes/" + sceneAssetName.Replace('/', '_');
+            }
+            using (var writer = asset.DestinationFolder.CreateXml(sceneAssetName))
+            {
+                if (writer == null)
+                    return;
                 using (var sceneElement = Element.Start(writer, "scene"))
                 {
                     WriteAttribute(writer, "\t", "Name", scene.name);
@@ -25,19 +31,20 @@ namespace Urho3DExporter
                     StartCompoent(writer, "\t", "DebugRenderer");
                     EndElement(writer, "\t");
                     foreach (var gameObject in scene.GetRootGameObjects())
-                    {
-                        WriteObject(writer, "", gameObject, exlusion);
-                    }
+                        WriteObject(writer, "", gameObject, exlusion, asset);
                 }
             }
         }
+
         public void ExportAsset(AssetContext asset)
         {
             var go = AssetDatabase.LoadAssetAtPath<SceneAsset>(asset.AssetPath);
 
             var exclusionSet = new HashSet<Renderer>();
-            using (XmlTextWriter writer = CreateXmlFile(asset))
+            using (var writer = asset.CreateXml())
             {
+                if (writer == null)
+                    return;
                 using (var scene = Element.Start(writer, "scene"))
                 {
                 }
