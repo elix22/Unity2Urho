@@ -1,0 +1,16 @@
+{
+    "name": "UnityToCustomEngineExporter.Editor",
+    "references": [
+        "UnityToCustomEngineExporter",
+        "Unity.ProBuilder"
+    ],
+    "optionalUnityReferences": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": []
+}
