@@ -4,7 +4,6 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Xml;
-using UnityToCustomEngineExporter.Editor.Urho3D;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
@@ -211,11 +210,11 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             return new XmlTextWriter(fileStream, new UTF8Encoding(false));
         }
 
-        public void ScheduleTexture(Texture texture, TextureReference textureReference = null)
+        public void ScheduleTexture(Texture texture)
         {
             if (texture == null) return;
             EditorTaskScheduler.Default.ScheduleForegroundTask(
-                () => _textureExporter.ExportTexture(texture, textureReference),
+                () => _textureExporter.ExportTexture(texture),
                 texture.name + " from " + AssetDatabase.GetAssetPath(texture));
         }
 
@@ -231,14 +230,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
 
             if (texture is Cubemap cubemap) return EvaluateCubemapName(cubemap);
 
-            return EvaluateTextrueName(texture, new TextureReference(TextureSemantic.Other));
-        }
-
-        public string EvaluateTextrueName(Texture texture, TextureReference textureReference)
-        {
-            if (texture == null)
-                return null;
-            return _textureExporter.EvaluateTextureName(texture, textureReference);
+            return _textureExporter.EvaluateTextureName(texture);
         }
 
         public string EvaluateMaterialName(Material skyboxMaterial)
@@ -384,7 +376,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 else if (asset is Texture2D texture2d)
                 {
                     EditorTaskScheduler.Default.ScheduleForegroundTask(
-                        () => _textureExporter.ExportTexture(texture2d, new TextureReference(TextureSemantic.Other)),
+                        () => _textureExporter.ExportTexture(texture2d),
                         texture2d.name + " from " + assetPath);
                 }
                 else if (asset is Cubemap cubemap)

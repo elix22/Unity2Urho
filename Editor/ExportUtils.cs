@@ -133,10 +133,19 @@ namespace UnityToCustomEngineExporter.Editor
                 options.filterMode = tImporter.filterMode;
                 options.wrapMode = tImporter.wrapMode;
                 options.mipmapEnabled = tImporter.mipmapEnabled;
+                options.textureImporterFormat = tImporter.GetAutomaticFormat("Standalone");
                 return options;
             }
 
-            return null;
+            // Default texture options.
+            return new TextureOptions()
+            {
+                filterMode = FilterMode.Trilinear,
+                mipmapEnabled = true,
+                sRGBTexture = true,
+                textureImporterFormat = null,
+                wrapMode = TextureWrapMode.Repeat
+            };
         }
 
         private static DateTime GetLastWriteTimeUtcFromRelPath(string relPath)

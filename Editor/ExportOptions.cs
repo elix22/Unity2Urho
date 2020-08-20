@@ -36,6 +36,7 @@ namespace UnityToCustomEngineExporter.Editor
         private CancellationTokenSource _cancellationTokenSource;
         private GUIStyle _myCustomStyle;
         private bool _showExtraOptions;
+        private bool _exporting;
 
         public ExportOptions()
         {
@@ -102,8 +103,6 @@ namespace UnityToCustomEngineExporter.Editor
 
             //GUILayout.Label(EditorTaskScheduler.Default.CurrentReport.Message);
 
-            EditorTaskScheduler.Default.DisplayProgressBar();
-
             {
                 GUI.enabled = _engine == null && ValidateExportPath(_exportFolder);
                 if (Selection.assetGUIDs.Length > 0)
@@ -152,14 +151,24 @@ namespace UnityToCustomEngineExporter.Editor
             var activeScene = SceneManager.GetActiveScene();
             if (activeScene != null)
             {
+                _exporting = true;
                 _engine = CreateEngine();
                 EditorTaskScheduler.Default.ScheduleForegroundTask(() => { _engine.ExportScene(activeScene); },
                     activeScene.path);
             }
         }
 
+        protected void Update()
+        {
+            if (_exporting)
+            {
+                _exporting = EditorTaskScheduler.Default.DisplayProgressBar();
+            }
+        }
+
         private void StartExportAssets(string[] assetGuiDs, PrefabContext prefabContext)
         {
+            _exporting = true;
             _engine = CreateEngine();
             EditorTaskScheduler.Default.ScheduleForegroundTask(() => _engine.ExportAssets(assetGuiDs, prefabContext));
         }
