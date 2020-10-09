@@ -31,10 +31,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             var exlusion = new HashSet<Renderer>();
 
             var sceneAssetName = ResolveAssetPath(scene);
-            var prefabContext = new PrefabContext()
-            {
-                TempFolder = ExportUtils.ReplaceExtension(sceneAssetName, "")
-            };
+            var prefabContext = new PrefabContext(_engine, null, ExportUtils.ReplaceExtension(sceneAssetName, ""));
             using (var writer = _engine.TryCreateXml(AssetKey.Empty, sceneAssetName, DateTime.MaxValue))
             {
                 if (writer == null) return;
@@ -69,16 +66,13 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                             .Where(_ => _ != null).FirstOrDefault();
                         var skyboxMaterial = skybox?.material ?? RenderSettings.skybox;
                         if (skybox == null && skyboxMaterial != null)
-                        {
                             WriteSkyboxComponent(writer, "\t", skyboxMaterial, prefabContext, true);
-                        }
                         if (skyboxMaterial != null)
                         {
-                            var skyboxCubemap = _engine.TryGetSkyboxCubemap(skyboxMaterial);
+                            var skyboxCubemap = _engine.TryGetSkyboxCubemap(skyboxMaterial, prefabContext);
                             if (!string.IsNullOrWhiteSpace(skyboxCubemap))
-                            {
-                                ExportZone(writer, "\t", new Vector3(2000, 2000, 2000), skyboxCubemap, prefabContext, true);
-                            }
+                                ExportZone(writer, "\t", new Vector3(2000, 2000, 2000), skyboxCubemap, prefabContext,
+                                    true);
                         }
 
                         foreach (var gameObject in rootGameObjects)

@@ -97,26 +97,23 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             }
         };
 
+        private readonly HashSet<string> _shaders = new HashSet<string>();
+
         public LegacyMaterialExporter(Urho3DEngine engine) : base(engine)
         {
         }
 
         public override int ExporterPriority => int.MinValue;
 
-        HashSet<string> _shaders = new HashSet<string>();
-
         public override bool CanExportMaterial(Material material)
         {
-            if (_shaders.Add(material.shader.name))
-            {
-                Debug.Log("Unknown shader: "+material.shader.name);
-            }
+            if (_shaders.Add(material.shader.name)) Debug.Log("Unknown shader: " + material.shader.name);
             return true;
         }
 
         public override void ExportMaterial(Material material, PrefabContext prefabContext)
         {
-            var urhoPath = EvaluateMaterialName(material);
+            var urhoPath = EvaluateMaterialName(material, prefabContext);
             using (var writer =
                 Engine.TryCreateXml(material.GetKey(), urhoPath, ExportUtils.GetLastWriteTimeUtc(material)))
             {

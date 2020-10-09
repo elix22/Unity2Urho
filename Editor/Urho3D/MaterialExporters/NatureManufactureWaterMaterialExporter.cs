@@ -18,7 +18,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D.MaterialExporters
 
         public override void ExportMaterial(Material material, PrefabContext prefabContext)
         {
-            var urhoPath = EvaluateMaterialName(material);
+            var urhoPath = EvaluateMaterialName(material, prefabContext);
             using (var writer =
                 Engine.TryCreateXml(material.GetKey(), urhoPath, ExportUtils.GetLastWriteTimeUtc(material)))
             {
@@ -29,7 +29,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D.MaterialExporters
                 urhoMaterial.Technique = "Techniques/PBR/PBRWater.xml";
                 var metallicGlossinessShaderArguments = new MetallicGlossinessShaderArguments();
 
-                var _SlowWaterNormal = GetTexture(material,"_SlowWaterNormal");
+                var _SlowWaterNormal = GetTexture(material, "_SlowWaterNormal");
                 var _SlowNormalScale = GetFloat(material, "_SlowNormalScale", 1);
 
                 metallicGlossinessShaderArguments.Bump = _SlowWaterNormal;

@@ -2,9 +2,8 @@
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Net;
+using System.Text;
 using System.Xml;
-using TreeEditor;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.ProBuilder;
@@ -98,10 +97,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             writer.WriteAttributeString("type", type);
             writer.WriteAttributeString("id", (++_id).ToString());
             writer.WriteWhitespace("\n");
-            if (!isEnabled)
-            {
-                WriteAttribute(writer, prefix + "\t", "Is Enabled", isEnabled);
-            }
+            if (!isEnabled) WriteAttribute(writer, prefix + "\t", "Is Enabled", isEnabled);
         }
 
         protected void WriteAttribute(XmlWriter writer, string prefix, string name, string vaue)
@@ -117,6 +113,8 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
         protected void WriteObject(XmlWriter writer, string prefix, GameObject obj, HashSet<Renderer> excludeList,
             bool parentEnabled, PrefabContext prefabContext)
         {
+            prefabContext = prefabContext.Retarget(obj);
+
             var isEnabled = obj.activeSelf && parentEnabled;
             if (_engine.Options.SkipDisabled && !isEnabled) return;
 
@@ -162,9 +160,14 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 {
                     ExportAudioSource(writer, audioSource, subPrefix, prefabContext);
                 }
+                else if (component is ParticleSystem particleSystem)
+                {
+                    ExportParticleSystem(writer, particleSystem, subPrefix, prefabContext, isEnabled);
+                }
                 else if (component is Terrain terrain)
                 {
-                    ExportTerrain(writer, terrain?.terrainData, obj.GetComponent<TerrainCollider>(), subPrefix, terrain.enabled, prefabContext);
+                    ExportTerrain(writer, terrain?.terrainData, obj.GetComponent<TerrainCollider>(), subPrefix,
+                        terrain.enabled, prefabContext);
                 }
                 else if (component is Rigidbody rigidbody)
                 {
@@ -258,10 +261,12 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                     switch (reflectionProbe.mode)
                     {
                         case ReflectionProbeMode.Baked:
-                            ExportZone(writer, subPrefix, reflectionProbe.size, reflectionProbe.bakedTexture as Cubemap, reflectionProbe.enabled, prefabContext);
+                            ExportZone(writer, subPrefix, reflectionProbe.size, reflectionProbe.bakedTexture as Cubemap,
+                                reflectionProbe.enabled, prefabContext);
                             break;
                         case ReflectionProbeMode.Custom:
-                            ExportZone(writer, subPrefix, reflectionProbe.size, reflectionProbe.customBakedTexture as Cubemap, reflectionProbe.enabled, prefabContext);
+                            ExportZone(writer, subPrefix, reflectionProbe.size,
+                                reflectionProbe.customBakedTexture as Cubemap, reflectionProbe.enabled, prefabContext);
                             break;
                     }
                 }
@@ -275,13 +280,50 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
 
             if (lodGroup != null)
             {
-                //TODO: Generate lod mesh
-                var name = _engine.ScheduleLODGroup(lodGroup, prefabContext);
+                var canExportLods = CanExportAsLod(lodGroup);
+                if (canExportLods)
+                {
+                    _engine.ScheduleLODGroup(lodGroup, prefabContext);
+                    var lods = lodGroup.GetLODs();
+                    var renderers = lods.SelectMany(_ => _.renderers).ToList();
 
-                var lods = lodGroup.GetLODs();
-                foreach (var lod in lods.Skip(1))
-                foreach (var renderer in lod.renderers)
-                    localExcludeList.Add(renderer);
+                    StartComponent(writer, subPrefix, "StaticModel", lodGroup.enabled);
+                    var meshPath = _engine.EvaluateMeshName(lodGroup, prefabContext);
+                    if (!string.IsNullOrWhiteSpace(meshPath))
+                        WriteAttribute(writer, subSubPrefix, "Model", "Model;" + meshPath);
+
+                    var materials = new StringBuilder("Material");
+                    var visitedMaterials = new HashSet<Material>();
+                    foreach (var renderer in renderers)
+                    foreach (var material in renderer.sharedMaterials)
+                        if (visitedMaterials.Add(material))
+                        {
+                            _engine.ScheduleAssetExport(material, prefabContext);
+                            var path = _engine.EvaluateMaterialName(material, prefabContext);
+                            materials.Append(";");
+                            materials.Append(path);
+                        }
+
+                    WriteAttribute(writer, subSubPrefix, "Material", materials.ToString());
+
+                    var firstRenderer = renderers.FirstOrDefault();
+                    if (firstRenderer != null)
+                        WriteAttribute(writer, subSubPrefix, "Cast Shadows",
+                            firstRenderer.shadowCastingMode != ShadowCastingMode.Off);
+
+                    EndElement(writer, subPrefix);
+
+                    foreach (var lod in lods.Skip(0))
+                    foreach (var renderer in lod.renderers)
+                        localExcludeList.Add(renderer);
+                }
+                else
+                {
+                    var lods = lodGroup.GetLODs();
+                    foreach (var lod in lods.Skip(1))
+                    foreach (var renderer in lod.renderers)
+                        localExcludeList.Add(renderer);
+                }
             }
 
             if (meshRenderer != null)
@@ -314,7 +356,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                         foreach (var material in meshRenderer.sharedMaterials)
                         {
                             _engine.ScheduleAssetExport(material, prefabContext);
-                            var path = _engine.EvaluateMaterialName(material);
+                            var path = _engine.EvaluateMaterialName(material, prefabContext);
                             materials += ";" + path;
                         }
 
@@ -346,7 +388,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                     foreach (var material in skinnedMeshRenderer.sharedMaterials)
                     {
                         _engine.ScheduleAssetExport(material, prefabContext);
-                        var path = _engine.EvaluateMaterialName(material);
+                        var path = _engine.EvaluateMaterialName(material, prefabContext);
                         materials += ";" + path;
                     }
 
@@ -363,7 +405,8 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
 
             foreach (Transform childTransform in obj.transform)
                 if (childTransform.parent.gameObject == obj)
-                    WriteObject(writer, subPrefix, childTransform.gameObject, localExcludeList, isEnabled, prefabContext);
+                    WriteObject(writer, subPrefix, childTransform.gameObject, localExcludeList, isEnabled,
+                        prefabContext);
 
             if (!string.IsNullOrEmpty(prefix))
                 writer.WriteWhitespace(prefix);
@@ -371,7 +414,112 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             writer.WriteWhitespace("\n");
         }
 
-        private void WriteCharacterController(XmlWriter writer, string prefix, CharacterController characterController, PrefabContext prefabContext)
+        protected void WriteSkyboxComponent(XmlWriter writer, string subPrefix, Material skyboxMaterial,
+            PrefabContext prefabContext, bool enabled)
+        {
+            var subSubPrefix = subPrefix + "\t";
+            StartComponent(writer, subPrefix, "Skybox", enabled);
+            if (skyboxMaterial.shader.name == "Skybox/Panoramic")
+            {
+                // Export sphere
+                var gameObject = GameObject.CreatePrimitive(UnityEngine.PrimitiveType.Sphere);
+                var mesh = gameObject.GetComponent<MeshFilter>().sharedMesh;
+                Object.DestroyImmediate(gameObject);
+                _engine.ScheduleAssetExport(mesh, prefabContext);
+                WriteAttribute(writer, subSubPrefix, "Model", "Model;" + _engine.EvaluateMeshName(mesh, prefabContext));
+            }
+            else
+            {
+                // Export cube
+                var gameObject = GameObject.CreatePrimitive(UnityEngine.PrimitiveType.Cube);
+                var mesh = gameObject.GetComponent<MeshFilter>().sharedMesh;
+                Object.DestroyImmediate(gameObject);
+                _engine.ScheduleAssetExport(mesh, prefabContext);
+                WriteAttribute(writer, subSubPrefix, "Model", "Model;" + _engine.EvaluateMeshName(mesh, prefabContext));
+            }
+
+            _engine.ScheduleAssetExport(skyboxMaterial, prefabContext);
+            var materials = "Material;" + _engine.EvaluateMaterialName(skyboxMaterial, prefabContext);
+            WriteAttribute(writer, subSubPrefix, "Material", materials);
+            EndElement(writer, subPrefix);
+        }
+
+        protected void ExportZone(XmlWriter writer, string subPrefix, Vector3 size, string cubemap,
+            PrefabContext prefabContext, bool enabled)
+        {
+            StartComponent(writer, subPrefix, "Zone", enabled);
+
+            var subSubPrefix = subPrefix + "\t";
+            WriteAttribute(writer, subSubPrefix, "Ambient Color", RenderSettings.ambientLight.linear);
+            WriteAttribute(writer, subSubPrefix, "Override Mode", false);
+            if (RenderSettings.fog)
+            {
+                WriteAttribute(writer, subSubPrefix, "Fog Color", RenderSettings.fogColor.linear);
+                WriteAttribute(writer, subSubPrefix, "Fog Start", RenderSettings.fogStartDistance);
+                WriteAttribute(writer, subSubPrefix, "Fog End", RenderSettings.fogEndDistance);
+                //switch (RenderSettings.fogMode)
+                //{
+                //    case FogMode.Linear:
+                //        break;
+                //    case FogMode.Exponential:
+                //        break;
+                //    case FogMode.ExponentialSquared:
+                //        break;
+                //    default:
+                //        throw new ArgumentOutOfRangeException();
+                //}
+            }
+
+
+            WriteAttribute(writer, subSubPrefix, "Bounding Box Min", -(size * 0.5f));
+            WriteAttribute(writer, subSubPrefix, "Bounding Box Max", size * 0.5f);
+
+            var volume = size.x * size.y * size.z;
+            if (volume != 0)
+            {
+                var priority = int.MaxValue / (volume * 2);
+                WriteAttribute(writer, subSubPrefix, "Priority", (int) priority);
+            }
+
+            WriteAttribute(writer, subSubPrefix, "Zone Texture", "TextureCube;" + cubemap);
+            EndElement(writer, subPrefix);
+        }
+
+        protected void ExportZone(XmlWriter writer, string subPrefix, Vector3 size, Cubemap cubemap, bool enabled,
+            PrefabContext prefabContext)
+        {
+            if (cubemap == null) return;
+
+            var assetPath = AssetDatabase.GetAssetPath(cubemap);
+            if (string.IsNullOrWhiteSpace(assetPath))
+                return;
+
+            _engine.ScheduleAssetExport(cubemap, prefabContext);
+            var texName = _engine.EvaluateCubemapName(cubemap);
+
+            ExportZone(writer, subPrefix, size, texName, prefabContext, enabled);
+        }
+
+        protected void StartNode(XmlWriter writer, string prefix)
+        {
+            if (!string.IsNullOrEmpty(prefix))
+                writer.WriteWhitespace(prefix);
+            writer.WriteStartElement("node");
+            writer.WriteAttributeString("id", (++_id).ToString(CultureInfo.InvariantCulture));
+            writer.WriteWhitespace(Environment.NewLine);
+        }
+
+        private bool CanExportAsLod(LODGroup lodGroup)
+        {
+            if (!_engine.Options.ExportLODs)
+                return false;
+            if (lodGroup.GetLODs().SelectMany(_ => _.renderers).Any(_ => _ is SkinnedMeshRenderer))
+                return false;
+            return true;
+        }
+
+        private void WriteCharacterController(XmlWriter writer, string prefix, CharacterController characterController,
+            PrefabContext prefabContext)
         {
             var subPrefix = prefix + "\t";
 
@@ -436,36 +584,8 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             EndElement(writer, subPrefix);
         }
 
-        protected void WriteSkyboxComponent(XmlWriter writer, string subPrefix, Material skyboxMaterial, PrefabContext prefabContext, bool enabled)
-        {
-            var subSubPrefix = subPrefix + "\t";
-            StartComponent(writer, subPrefix, "Skybox", enabled);
-            if (skyboxMaterial.shader.name == "Skybox/Panoramic")
-            {
-                // Export sphere
-                var gameObject = GameObject.CreatePrimitive(UnityEngine.PrimitiveType.Sphere);
-                var mesh = gameObject.GetComponent<MeshFilter>().sharedMesh;
-                Object.DestroyImmediate(gameObject);
-                _engine.ScheduleAssetExport(mesh, prefabContext);
-                WriteAttribute(writer, subSubPrefix, "Model", "Model;" + _engine.EvaluateMeshName(mesh, prefabContext));
-            }
-            else
-            {
-                // Export cube
-                var gameObject = GameObject.CreatePrimitive(UnityEngine.PrimitiveType.Cube);
-                var mesh = gameObject.GetComponent<MeshFilter>().sharedMesh;
-                Object.DestroyImmediate(gameObject);
-                _engine.ScheduleAssetExport(mesh, prefabContext);
-                WriteAttribute(writer, subSubPrefix, "Model", "Model;" + _engine.EvaluateMeshName(mesh, prefabContext));
-            }
-
-            _engine.ScheduleAssetExport(skyboxMaterial, prefabContext);
-            var materials = "Material;" + _engine.EvaluateMaterialName(skyboxMaterial);
-            WriteAttribute(writer, subSubPrefix, "Material", materials);
-            EndElement(writer, subPrefix);
-        }
-
-        private void WriteAnimationController(XmlWriter writer, string prefix, Animator animator, PrefabContext prefabContext)
+        private void WriteAnimationController(XmlWriter writer, string prefix, Animator animator,
+            PrefabContext prefabContext)
         {
             if (animator == null)
                 return;
@@ -475,7 +595,9 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             WriteAnimationStates(writer, animator, subPrefix, "Node Animation States", prefabContext);
             EndElement(writer, prefix);
         }
-        private void WriteAnimationController(XmlWriter writer, string prefix, Animation animation, PrefabContext prefabContext)
+
+        private void WriteAnimationController(XmlWriter writer, string prefix, Animation animation,
+            PrefabContext prefabContext)
         {
             if (animation == null)
                 return;
@@ -485,7 +607,9 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             WriteAnimationStates(writer, animation, subPrefix, "Node Animation States", prefabContext);
             EndElement(writer, prefix);
         }
-        private void WriteAnimationStates(XmlWriter writer, Animator animator, string subPrefix, string statesAttr, PrefabContext prefabContext)
+
+        private void WriteAnimationStates(XmlWriter writer, Animator animator, string subPrefix, string statesAttr,
+            PrefabContext prefabContext)
         {
             if (animator == null)
                 return;
@@ -524,7 +648,9 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             writer.WriteEndElement();
             writer.WriteWhitespace(Environment.NewLine);
         }
-        private void WriteAnimationStates(XmlWriter writer, Animation animation, string subPrefix, string statesAttr, PrefabContext prefabContext)
+
+        private void WriteAnimationStates(XmlWriter writer, Animation animation, string subPrefix, string statesAttr,
+            PrefabContext prefabContext)
         {
             if (animation == null)
                 return;
@@ -536,9 +662,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
 
             WriteVariant(writer, subSubPrefix, animation.GetClipCount());
             if (animation.GetClipCount() > 0)
-            {
-                foreach (object animationItem in animation)
-                {
+                foreach (var animationItem in animation)
                     if (animationItem is AnimationState animationState)
                     {
                         var clip = animationState.clip;
@@ -547,7 +671,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                         _engine.ScheduleAssetExport(clip, prefabContext);
                         var startBone = "";
                         var isLooped = clip.wrapMode == WrapMode.Loop;
-                        var weight = (animation.playAutomatically && clip == animation.clip) ? 1.0f : 0.0f;
+                        var weight = animation.playAutomatically && clip == animation.clip ? 1.0f : 0.0f;
                         var time = 0.0f;
                         var layer = animationState.layer;
                         WriteVariant(writer, subSubPrefix, startBone);
@@ -560,13 +684,12 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                     {
                         Debug.LogWarning(animationItem.GetType().FullName);
                     }
-                }
-            }
 
             writer.WriteWhitespace(subPrefix);
             writer.WriteEndElement();
             writer.WriteWhitespace(Environment.NewLine);
         }
+
         private void WriteVariant(XmlWriter writer, string subSubPrefix, int value)
         {
             WriteVariant(writer, subSubPrefix, "Int", value.ToString(CultureInfo.InvariantCulture));
@@ -667,7 +790,19 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             }
         }
 
-        private void ExportAudioSource(XmlWriter writer, AudioSource audioSource, string subPrefix, PrefabContext prefabContext)
+        private void ExportParticleSystem(XmlWriter writer, ParticleSystem particleSystem, string subPrefix,
+            PrefabContext prefabContext, bool enabled)
+        {
+            var subSubPrefix = subPrefix + "\t";
+            StartComponent(writer, subPrefix, "ParticleEmitter", true);
+            var name = _engine.ScheduleParticleEffect(particleSystem, prefabContext);
+            WriteAttribute(writer, subSubPrefix, "Effect", "Texture2D;" + name);
+            WriteAttribute(writer, subSubPrefix, "Animation LOD Bias", 0);
+            EndElement(writer, subPrefix);
+        }
+
+        private void ExportAudioSource(XmlWriter writer, AudioSource audioSource, string subPrefix,
+            PrefabContext prefabContext)
         {
             var subSubPrefix = subPrefix + "\t";
             StartComponent(writer, subPrefix, "SoundSource3D", audioSource.enabled);
@@ -713,67 +848,13 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             return (min, max, new Vector2(w, h));
         }
 
-        protected void ExportZone(XmlWriter writer, string subPrefix, Vector3 size, string cubemap,
-            PrefabContext prefabContext, bool enabled)
-        {
-            StartComponent(writer, subPrefix, "Zone", enabled);
-
-            var subSubPrefix = subPrefix + "\t";
-            WriteAttribute(writer, subSubPrefix, "Ambient Color", RenderSettings.ambientLight.linear);
-            WriteAttribute(writer, subSubPrefix, "Override Mode", false);
-            if (RenderSettings.fog)
-            {
-                WriteAttribute(writer, subSubPrefix, "Fog Color", RenderSettings.fogColor.linear);
-                WriteAttribute(writer, subSubPrefix, "Fog Start", RenderSettings.fogStartDistance);
-                WriteAttribute(writer, subSubPrefix, "Fog End", RenderSettings.fogEndDistance);
-                //switch (RenderSettings.fogMode)
-                //{
-                //    case FogMode.Linear:
-                //        break;
-                //    case FogMode.Exponential:
-                //        break;
-                //    case FogMode.ExponentialSquared:
-                //        break;
-                //    default:
-                //        throw new ArgumentOutOfRangeException();
-                //}
-            }
-
-
-            WriteAttribute(writer, subSubPrefix, "Bounding Box Min", -(size * 0.5f));
-            WriteAttribute(writer, subSubPrefix, "Bounding Box Max", size * 0.5f);
-
-            var volume = size.x * size.y * size.z;
-            if (volume != 0)
-            {
-                var priority = int.MaxValue / (volume * 2);
-                WriteAttribute(writer, subSubPrefix, "Priority", (int)priority);
-            }
-
-            WriteAttribute(writer, subSubPrefix, "Zone Texture", "TextureCube;" + cubemap);
-            EndElement(writer, subPrefix);
-        }
-
-        protected void ExportZone(XmlWriter writer, string subPrefix, Vector3 size, Cubemap cubemap, bool enabled, PrefabContext prefabContext)
-        {
-            if (cubemap == null) return;
-
-            var assetPath = AssetDatabase.GetAssetPath(cubemap);
-            if (string.IsNullOrWhiteSpace(assetPath))
-                return;
-
-            _engine.ScheduleAssetExport(cubemap, prefabContext);
-            var texName = _engine.EvaluateCubemapName(cubemap);
-
-            ExportZone(writer, subPrefix, size, texName, prefabContext, enabled);
-        }
-
         private void ExportCustomComponent(XmlWriter writer, string subPrefix, IUrho3DComponent customComponent)
         {
             if (customComponent == null) return;
 
             var subSubPrefix = subPrefix + "\t";
-            StartComponent(writer, subPrefix, customComponent.GetUrho3DComponentName(), customComponent.IsUrho3DComponentEnabled);
+            StartComponent(writer, subPrefix, customComponent.GetUrho3DComponentName(),
+                customComponent.IsUrho3DComponentEnabled);
             foreach (var keyValuePair in customComponent.GetUrho3DComponentAttributes())
                 WriteAttribute(writer, subSubPrefix, keyValuePair.Name, keyValuePair.Value);
             EndElement(writer, subPrefix);
@@ -789,7 +870,8 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             WriteAttribute(writer, prefix, name, flag.ToString(CultureInfo.InvariantCulture));
         }
 
-        private void ExportTerrain(XmlWriter writer, TerrainData terrainData, TerrainCollider terrainCollider, string subPrefix, bool enabled, PrefabContext prefabContext)
+        private void ExportTerrain(XmlWriter writer, TerrainData terrainData, TerrainCollider terrainCollider,
+            string subPrefix, bool enabled, PrefabContext prefabContext)
         {
             if (terrainData == null) return;
 
@@ -860,18 +942,10 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             WriteAttribute(writer, subPrefix, "Scale", scale);
             var rotation = Quaternion.AngleAxis(treeInstance.rotation, Vector3.up);
             WriteAttribute(writer, subPrefix, "Rotation", rotation);
-            
-            WriteObject(writer, subPrefix + "\t", treePrototype.prefab, new HashSet<Renderer>(), enabled, prefabContext);
-            EndElement(writer, subPrefix);
-        }
 
-        protected void StartNode(XmlWriter writer, string prefix)
-        {
-            if (!string.IsNullOrEmpty(prefix))
-                writer.WriteWhitespace(prefix);
-            writer.WriteStartElement("node");
-            writer.WriteAttributeString("id", (++_id).ToString(CultureInfo.InvariantCulture));
-            writer.WriteWhitespace(Environment.NewLine);
+            WriteObject(writer, subPrefix + "\t", treePrototype.prefab, new HashSet<Renderer>(), enabled,
+                prefabContext);
+            EndElement(writer, subPrefix);
         }
 
         public class Element : IDisposable

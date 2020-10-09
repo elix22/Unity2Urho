@@ -21,6 +21,7 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
         private readonly TextureExporter _textureExporter;
         private readonly CubemapExporter _cubemapExporter;
         private readonly MeshExporter _meshExporter;
+        private readonly ParticleExporter _particleExporter;
         private readonly AnimationExporter _animationExporter;
         private readonly AnimationControllerExporter _animationControllerExporter;
         private readonly MaterialExporter _materialExporter;
@@ -30,7 +31,6 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
         private readonly TerrainExporter _terrainExporter;
         private Dictionary<Object, string> _assetPaths = new Dictionary<Object, string>();
         private string _tempFolder;
-        private Urho3DExportOptions _options;
 
         public Urho3DEngine(string dataFolder, CancellationToken cancellationToken,
             Urho3DExportOptions options)
@@ -38,13 +38,14 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
         {
             _dataFolder = dataFolder;
 
-            _options = options;
+            Options = options;
 
 
             _audioExporter = new AudioExporter(this);
             _textureExporter = new TextureExporter(this);
             _cubemapExporter = new CubemapExporter(this);
             _meshExporter = new MeshExporter(this);
+            _particleExporter = new ParticleExporter(this);
             _materialExporter = new MaterialExporter(this);
             _sceneExporter = new SceneExporter(this);
             _prefabExporter = new PrefabExporter(this);
@@ -52,12 +53,12 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             _animationExporter = new AnimationExporter(this);
             _animationControllerExporter = new AnimationControllerExporter(this);
             CopyFolder(options.Subfolder, "bcc1b6196266be34e88c40110ba206ce");
-            if (_options.ExportShadersAndTechniques)
+            if (Options.ExportShadersAndTechniques)
                 CopyFolder("", "a20749a09ce562043815b33e8eec4077");
             _createdFiles.Clear();
         }
 
-        public Urho3DExportOptions Options => _options;
+        public Urho3DExportOptions Options { get; }
 
 
         public void CopyFolder(string subfolder, string guid)
@@ -232,14 +233,19 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             return _textureExporter.EvaluateTextureName(texture);
         }
 
-        public string EvaluateMaterialName(Material skyboxMaterial)
+        public string EvaluateMaterialName(Material material, PrefabContext prefabContext)
         {
-            return _materialExporter.EvaluateMaterialName(skyboxMaterial);
+            return _materialExporter.EvaluateMaterialName(material, prefabContext);
         }
 
         public string EvaluateMeshName(Mesh sharedMesh, PrefabContext prefabContext)
         {
             return _meshExporter.EvaluateMeshName(sharedMesh, prefabContext);
+        }
+
+        public string EvaluateMeshName(LODGroup sharedMesh, PrefabContext prefabContext)
+        {
+            return _meshExporter.EvaluateLODGroupName(sharedMesh, prefabContext);
         }
 
         public string EvaluateMeshName(ProBuilderMesh sharedMesh, PrefabContext prefabContext)
@@ -288,6 +294,41 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             return _animationExporter.EvaluateAnimationName(clip, prefabContext);
         }
 
+        public string TryGetSkyboxCubemap(Material skyboxMaterial, PrefabContext prefabContext)
+        {
+            return _materialExporter.TryGetSkyboxCubemap(skyboxMaterial, prefabContext);
+        }
+
+        public string ScheduleLODGroup(LODGroup lodGroup, PrefabContext prefabContext)
+        {
+            if (lodGroup == null)
+                return null;
+            var name = _meshExporter.EvaluateLODGroupName(lodGroup, prefabContext);
+            EditorTaskScheduler.Default.ScheduleForegroundTask(
+                () => _meshExporter.ExportLODGroup(lodGroup, prefabContext), "LODGroup " + name);
+            return name;
+        }
+
+        public string ScheduleParticleEffect(ParticleSystem particleSystem, PrefabContext prefabContext)
+        {
+            if (particleSystem == null)
+                return null;
+            var name = _particleExporter.EvaluateName(particleSystem, prefabContext);
+            EditorTaskScheduler.Default.ScheduleForegroundTask(
+                () => _particleExporter.ExportEffect(particleSystem, prefabContext), "ParticleEffect " + name);
+            return name;
+        }
+
+        public string DecorateName(string name)
+        {
+            if (string.IsNullOrEmpty(name))
+                return name;
+            if (!Options.ASCIIOnly)
+                return name;
+
+            return Uri.EscapeDataString(name);
+        }
+
         public void ExportScene(Scene scene)
         {
             _sceneExporter.ExportScene(scene);
@@ -297,7 +338,8 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
         {
         }
 
-        protected override void ExportAssetBlock(string assetPath, Type mainType, Object[] assets, PrefabContext prefabContext)
+        protected override void ExportAssetBlock(string assetPath, Type mainType, Object[] assets,
+            PrefabContext prefabContext)
         {
             if (mainType == typeof(GameObject))
             {
@@ -311,7 +353,8 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 foreach (var asset in assets)
                     if (asset is Mesh mesh)
                         EditorTaskScheduler.Default.ScheduleForegroundTask(
-                            () => _meshExporter.ExportMeshModel(new MeshSource(mesh), EvaluateMeshName(mesh, prefabContext),
+                            () => _meshExporter.ExportMeshModel(() => new MeshSource(mesh),
+                                EvaluateMeshName(mesh, prefabContext),
                                 mesh.GetKey(), ExportUtils.GetLastWriteTimeUtc(mesh)),
                             mesh.name + " from " + assetPath);
             }
@@ -364,13 +407,15 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 }
                 else if (asset is Material material)
                 {
-                    EditorTaskScheduler.Default.ScheduleForegroundTask(() => _materialExporter.ExportMaterial(material, prefabContext),
+                    EditorTaskScheduler.Default.ScheduleForegroundTask(
+                        () => _materialExporter.ExportMaterial(material, prefabContext),
                         material.name + " from " + assetPath);
                 }
                 else if (asset is TerrainData terrainData)
                 {
                     EditorTaskScheduler.Default.ScheduleForegroundTask(
-                        () => _terrainExporter.ExportTerrain(terrainData, prefabContext), terrainData.name + " from " + assetPath);
+                        () => _terrainExporter.ExportTerrain(terrainData, prefabContext),
+                        terrainData.name + " from " + assetPath);
                 }
                 else if (asset is Texture2D texture2d)
                 {
@@ -386,32 +431,48 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
                 else if (asset is AnimationClip animationClip)
                 {
                     EditorTaskScheduler.Default.ScheduleForegroundTask(
-                        () => _animationExporter.ExportAnimation(animationClip, prefabContext), animationClip.name + " from " + assetPath);
+                        () => _animationExporter.ExportAnimation(animationClip, prefabContext),
+                        animationClip.name + " from " + assetPath);
                 }
                 else if (asset is AnimatorController animationController)
                 {
                     EditorTaskScheduler.Default.ScheduleForegroundTask(
-                        () => _animationControllerExporter.ExportAnimationController(animationController, prefabContext), animationController.name + " from " + assetPath);
+                        () => _animationControllerExporter.ExportAnimationController(animationController,
+                            prefabContext), animationController.name + " from " + assetPath);
                 }
         }
 
         protected override IEnumerable<ProgressBarReport> ExportDynamicAsset(Object asset, PrefabContext prefabContext)
         {
-            if (asset is ProBuilderMesh proBuilderMesh)
+            if (asset == null)
+                yield break;
+            if (asset.GetType().Name == "ProBuilderMesh")
             {
-                _meshExporter.ExportMesh(proBuilderMesh, prefabContext);
+                _meshExporter.ExportProBuilderMesh(asset, prefabContext);
                 yield break;
             }
+
             if (asset is Mesh mesh)
             {
                 _meshExporter.ExportMesh(mesh, prefabContext);
                 yield break;
             }
-            if (asset is LODGroup lodGroup)
+
+            if (asset is Material material)
             {
-                _meshExporter.ExportLODGroup(lodGroup, prefabContext);
+                _materialExporter.ExportMaterial(material, prefabContext);
                 yield break;
             }
+
+
+            if (asset is ParticleSystem particleSystem)
+            {
+                _particleExporter.ExportEffect(particleSystem, prefabContext);
+                yield break;
+            }
+
+
+            if (asset is LODGroup lodGroup) _meshExporter.ExportLODGroup(lodGroup, prefabContext);
         }
 
         private bool CheckForFileUniqueness(string targetPath, AssetKey assetGuid)
@@ -431,30 +492,6 @@ namespace UnityToCustomEngineExporter.Editor.Urho3D
             }
 
             return false;
-        }
-
-        public string TryGetSkyboxCubemap(Material skyboxMaterial)
-        {
-            return _materialExporter.TryGetSkyboxCubemap(skyboxMaterial);
-        }
-
-        public string ScheduleLODGroup(LODGroup lodGroup, PrefabContext prefabContext)
-        {
-            if (lodGroup == null)
-                return null;
-            var name = _meshExporter.EvaluateLODGroupName(lodGroup, prefabContext);
-            _meshExporter.ExportLODGroup(lodGroup, prefabContext);
-            return name;
-        }
-
-        public string DecorateName(string name)
-        {
-            if (string.IsNullOrEmpty(name))
-                return name;
-            if (!Options.ASCIIOnly)
-                return name;
-
-            return Uri.EscapeDataString(name);
         }
     }
 }
